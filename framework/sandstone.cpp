@@ -121,6 +121,7 @@ enum {
     fatal_skips_option,
     gdb_server_option,
     ignore_os_errors_option,
+    ignore_test_failure,
     ignore_unknown_tests_option,
     is_asan_option,
     is_debug_option,
@@ -416,6 +417,16 @@ static void __attribute__((noreturn)) report_fail_common()
     __builtin_unreachable();
 }
 
+bool check_if_test_failure_ignored()
+{
+    return sApp->ignore_test_failure;
+}
+
+void _report_fail_ignored(const struct test *test, const char *file, int line)
+{
+    logging_mark_thread_failed(thread_num);
+}
+
 void _report_fail(const struct test *test, const char *file, int line)
 {
     /* Keep this very early */
@@ -424,7 +435,13 @@ void _report_fail(const struct test *test, const char *file, int line)
 
     if (!SandstoneConfig::NoLogging)
         log_error("Failed at %s:%d", file, line);
+
     report_fail_common();
+}
+
+void _report_fail_msg_ignored(const char *file, int line, const char *fmt, ...)
+{
+    logging_mark_thread_failed(thread_num);
 }
 
 void _report_fail_msg(const char *file, int line, const char *fmt, ...)
@@ -435,6 +452,7 @@ void _report_fail_msg(const char *file, int line, const char *fmt, ...)
 
     if (!SandstoneConfig::NoLogging)
         log_error("Failed at %s:%d: %s", file, line, va_start_and_stdprintf(fmt).c_str());
+
     report_fail_common();
 }
 
@@ -448,6 +466,11 @@ static ptrdiff_t memcmp_offset(const uint8_t *d1, const uint8_t *d2, size_t size
             return i;
     }
     return -1;
+}
+
+void _memcmp_fail_report_ignored(const void *_actual, const void *_expected, size_t size, DataType type, const char *fmt, ...)
+{
+    logging_mark_thread_failed(thread_num);
 }
 
 void _memcmp_fail_report(const void *_actual, const void *_expected, size_t size, DataType type, const char *fmt, ...)
@@ -953,6 +976,16 @@ static uintptr_t thread_runner(int thread_number)
 
     try {
         ret = test_run_wrapper_function(current_test, thread_number);
+
+        if(check_if_test_failure_ignored()) {
+            PerThreadData::Common *thr = sApp->thread_data(thread_number);
+
+            if(thr->get_ignored_fails() > 0) {
+                log_message(thread_number,
+                    SANDSTONE_LOG_INFO "Found ignored failures. Number of ignored failures %" PRIu64 "\n",
+                    thr->get_ignored_fails());
+            }
+        }
     } catch (std::exception &e) {
         log_error("Caught C++ exception: \"%s\" (type '%s')", e.what(), typeid(e).name());
         // no rethrow
@@ -1363,6 +1396,8 @@ Common command-line options are:
      Selectively enable/disable a given test. Can be given multiple times.
      <test> is a test's ID (see the -l option), a wildcard matching test IDs.
      or a test group (starting with @).
+ --ignore-test-failure
+     Continue execution of Sandstone even if a test reports a failure.
  --ignore-os-error, --ignore-timeout
      Continue execution of Sandstone even if a test encounters an operating
      system error (this includes tests timing out).
@@ -3084,6 +3119,7 @@ int main(int argc, char **argv)
         { "fork-mode", required_argument, nullptr, 'f' },
         { "help", no_argument, nullptr, 'h' },
         { "ignore-os-errors", no_argument, nullptr, ignore_os_errors_option },
+        { "ignore-test-failure", no_argument, nullptr, ignore_test_failure},
         { "ignore-timeout", no_argument, nullptr, ignore_os_errors_option },
         { "ignore-unknown-tests", no_argument, nullptr, ignore_unknown_tests_option },
         { "list", no_argument, nullptr, 'l' },
@@ -3307,6 +3343,9 @@ int main(int argc, char **argv)
 #endif
         case ignore_os_errors_option:
             sApp->ignore_os_errors = true;
+            break;
+        case ignore_test_failure:
+            sApp->ignore_test_failure = true;
             break;
         case ignore_unknown_tests_option:
             sApp->ignore_unknown_tests = true;

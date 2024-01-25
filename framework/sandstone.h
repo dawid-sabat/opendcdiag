@@ -478,19 +478,38 @@ struct test {
 /* internal function; see C macro and C++ templates at the end of this file */
 extern void _memcmp_fail_report(const void *actual, const void *expected, size_t size, enum DataType, const char *fmt, ...)
     ATTRIBUTE_PRINTF(5, 6) __attribute__((cold, noreturn));
+extern void _memcmp_fail_report_ignored(const void *actual, const void *expected, size_t size, enum DataType, const char *fmt, ...)
+    ATTRIBUTE_PRINTF(5, 6) __attribute__((cold));
 
 /// can be called from a test's test_run function to fail the test.
 /// This macro will kill the calling thread and cause the test to
 /// exit.
-#define report_fail(test)       _report_fail(test, __FILE__, __LINE__)
+#define report_fail(test) \
+    if (check_if_test_failure_ignored()) { \
+        _report_fail_ignored(test, __FILE__, __LINE__); \
+    } else { \
+        _report_fail(test, __FILE__, __LINE__); \
+    }
 /// can be called from a test's test_run function to fail the test.
 /// The failure will be annotated by the provided format string.
 /// This macro will kill the calling thread and cause the test to
 /// exit.
-#define report_fail_msg(...)    _report_fail_msg(__FILE__, __LINE__, __VA_ARGS__)
+#define report_fail_msg(...) \
+    if (check_if_test_failure_ignored()) { \
+        _report_fail_msg_ignored(__FILE__, __LINE__, __VA_ARGS__); \
+    } else { \
+        _report_fail_msg(__FILE__, __LINE__, __VA_ARGS__); \
+    }
+
 extern void _report_fail(const struct test *test, const char *file, int line) __attribute__((noreturn));
 extern void _report_fail_msg(const char *file, int line, const char *msg, ...)
     ATTRIBUTE_PRINTF(3, 4) __attribute__((noreturn));
+
+extern void _report_fail_ignored(const struct test *test, const char *file, int line);
+extern void _report_fail_msg_ignored(const char *file, int line, const char *msg, ...) ATTRIBUTE_PRINTF(3, 4);
+
+/// @internal check if a test failure should be ignored.
+extern bool check_if_test_failure_ignored(void);
 
 /// @internal function called by TEST_LOOP
 extern void test_loop_start(void) noexcept;
@@ -646,6 +665,21 @@ memcmp_fail_report(const T *actual, const T *expected, size_t count, const char 
         _memcmp_fail_report(actual, expected, count * elemSize, type, fmt, std::forward<FmtArgs>(args)...);
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-security"
+template <typename T, typename... FmtArgs> [[gnu::cold]] static inline std::enable_if_t<SandstoneDataDetails::TypeToDataType<T>::IsValid>
+memcmp_fail_report_ignored(const T *actual, const T *expected, size_t count, const char *fmt, FmtArgs &&... args)
+{
+    DataType type = SandstoneDataDetails::TypeToDataType<T>::Type;
+    size_t elemSize = 1;
+    if constexpr (!std::is_same_v<T, void>)
+        elemSize = sizeof(T);
+    if (SandstoneConfig::NoLogging)
+        _memcmp_fail_report_ignored(actual, expected, count * elemSize, type, nullptr);
+    else
+        _memcmp_fail_report_ignored(actual, expected, count * elemSize, type, fmt, std::forward<FmtArgs>(args)...);
+}
+
 /// compares the arrays actual and expected, both of which are expected to have count elements,
 /// and fails the test if the two arrays are not equal.  In the case of a mismatch the calling
 /// thread will exit and diagnostic information will be output to the logs to indicate the
@@ -659,8 +693,13 @@ memcmp_or_fail(const T *actual, const T *expected, size_t count, const char *fmt
     size_t elemSize = 1;
     if constexpr (!std::is_same_v<T, void>)
         elemSize = sizeof(T);
-    if (__builtin_memcmp(actual, expected, count * elemSize) != 0)
-        memcmp_fail_report(actual, expected, count, fmt, std::forward<FmtArgs>(args)...);
+    if (__builtin_memcmp(actual, expected, count * elemSize) != 0) {
+        if (check_if_test_failure_ignored()) {
+            memcmp_fail_report_ignored(actual, expected, count, fmt, std::forward<FmtArgs>(args)...);
+        } else {
+            memcmp_fail_report(actual, expected, count, fmt, std::forward<FmtArgs>(args)...);
+        }
+    }
 }
 
 template <typename T> static inline std::enable_if_t<SandstoneDataDetails::TypeToDataType<T>::IsValid>
@@ -683,13 +722,30 @@ memcmp_or_fail(const T *actual, const T *expected, size_t count)
         _Pragma("GCC diagnostic pop");                              \
     })
 
+#define memcmp_fail_report_ignored(actual, expected, size, fmt, ...)        \
+    __extension__ ({                                                \
+        enum DataType _type = DATATYPEFORTYPE(*(_actual));          \
+        size_t _size2 = sizeof(*_actual) * (size);                  \
+        _Pragma("GCC diagnostic push");                             \
+        _Pragma("GCC diagnostic ignored \"-Wformat-security\"");    \
+        _Pragma("GCC diagnostic ignored \"-Wunused-variable\"");    \
+        _memcmp_fail_report_ignored((actual), (expected), _size2, _type,    \
+                            *(fmt) ? (fmt) : NULL, ##__VA_ARGS__);  \
+        _Pragma("GCC diagnostic pop");                              \
+    })
+
 #define _memcmp_or_fail(actual, expected, size, fmt, ...)           \
     __extension__ ({                                                \
         __auto_type _actual = (actual);                             \
         __auto_type _expected = (expected);                         \
         size_t _size = sizeof(*_actual) * (size);                   \
-        if (__builtin_memcmp(_actual, _expected, _size) != 0)       \
-            memcmp_fail_report(_actual, _expected, (size), fmt, ##__VA_ARGS__); \
+        if (__builtin_memcmp(_actual, _expected, _size) != 0) {     \
+            if (check_if_test_failure_ignored()) {                  \
+                memcmp_fail_report_ignored(_actual, _expected, (size), fmt, ##__VA_ARGS__); \
+            } else {                                                \
+                memcmp_fail_report(_actual, _expected, (size), fmt, ##__VA_ARGS__); \
+            }                                                       \
+        }                                                           \
     })
 #define memcmp_or_fail(actual, expected, size, ...) \
     _memcmp_or_fail(actual, expected, size, "" __VA_ARGS__)

@@ -755,16 +755,20 @@ static std::string create_filtered_message_string(const char *fmt, va_list va)
 void logging_mark_thread_failed(int thread_num)
 {
     PerThreadData::Common *thr = sApp->thread_data(thread_num);
-    if (thr->has_failed())
-        return;
+    if(sApp->ignore_test_failure) {
+        thr->ignored_fails++;
+    } else {
+        if (thr->has_failed())
+            return;
 
-    // note: must use std::chrono::steady_clock here instead of
-    // get_monotonic_time_now() because we'll compare to
-    // sApp->current_test_starttime.
-    thr->fail_time = std::chrono::steady_clock::now();
-    if (thread_num >= 0) {
-        auto tthr = static_cast<PerThreadData::Test *>(thr);
-        tthr->inner_loop_count_at_fail = tthr->inner_loop_count;
+        // note: must use std::chrono::steady_clock here instead of
+        // get_monotonic_time_now() because we'll compare to
+        // sApp->current_test_starttime.
+        thr->fail_time = std::chrono::steady_clock::now();
+        if (thread_num >= 0) {
+            auto tthr = static_cast<PerThreadData::Test *>(thr);
+            tthr->inner_loop_count_at_fail = tthr->inner_loop_count;
+        }
     }
 }
 

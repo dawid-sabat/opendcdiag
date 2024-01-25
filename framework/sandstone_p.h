@@ -189,6 +189,13 @@ struct Common
     std::atomic<unsigned> data_bytes_logged;
 
     MonotonicTimePoint fail_time;
+    uint64_t ignored_fails;
+
+    uint64_t get_ignored_fails() const
+    {
+        return ignored_fails;
+    }
+
     bool has_failed() const
     {
         return fail_time < MonotonicTimePoint::max();
@@ -200,6 +207,7 @@ struct Common
         fail_time = MonotonicTimePoint::max();
         messages_logged.store(0, std::memory_order_relaxed);
         data_bytes_logged.store(0, std::memory_order_relaxed);
+        ignored_fails = 0;
     }
 };
 
@@ -371,6 +379,7 @@ struct SandstoneApplication : public InterruptMonitor, public test_the_test_data
             fork_each_test;
 #endif
     bool ignore_os_errors = false;
+    bool ignore_test_failure = false;
     bool ignore_unknown_tests = false;
     bool force_test_time = false;
     bool service_background_scan = false;
